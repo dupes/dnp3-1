@@ -4,7 +4,7 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>f0829d00-018d-42a6-ba85-e97b400f0a4e</ProjectGuid>
+    <ProjectGuid>{C4575EFF-D3A2-410E-9CBE-0136CC606458}</ProjectGuid>
     <OutputType>WinExe</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>DERTestSet</RootNamespace>
@@ -44,6 +44,10 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="dnp3\CommandHandler.cs" />
+    <Compile Include="dnp3\DEROutstation.cs" />
+    <Compile Include="dnp3\OutstationManager.cs" />
+    <Compile Include="dnp3\TimeWriteHandler.cs" />
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -52,6 +56,9 @@
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <EmbeddedResource Include="Form1.resx">
+      <DependentUpon>Form1.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
@@ -73,6 +80,16 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\clr\DNP3CLRAdapter\DNP3CLRAdapter.vcxproj">
+      <Project>{d2119bee-135f-422c-8166-26d73113d689}</Project>
+      <Name>DNP3CLRAdapter</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\clr\DNP3CLRInterface\DNP3CLRInterface.csproj">
+      <Project>{5f06c7be-3107-4b3e-8559-e5e1bb4008b5}</Project>
+      <Name>DNP3CLRInterface</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
