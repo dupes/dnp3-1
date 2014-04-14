@@ -73,6 +73,8 @@ cpp/demos/outstation/Debug
 cpp/demos/outstation/Release
 *vcxproj.user
 cpp/unittest.log
+clr/DERTestSet/bin
+clr/DERTestSet/obj
 
 #sandcastle generated files
 clr/Help
