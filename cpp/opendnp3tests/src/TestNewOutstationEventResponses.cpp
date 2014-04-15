@@ -20,9 +20,8 @@
  */
 #include <catch.hpp>
 
-
 #include "MockLogSubscriber.h"
-#include "OutstationTestObject.h"
+#include "NewOutstationTestObject.h"
 
 #include <opendnp3/DNPErrorCodes.h>
 
@@ -31,22 +30,22 @@ using namespace std;
 using namespace opendnp3;
 using namespace openpal;
 
-#define SUITE(name) "OutstationEventResponsesTestSuite - " name
+#define SUITE(name) "NewOutstationEventResponsesTestSuite - " name
 
 TEST_CASE(SUITE("BlankExceptionScan"))
 {
-	OutstationConfig cfg; cfg.disableUnsol = true;
-	OutstationTestObject t(cfg, DatabaseTemplate());
+	NewOutstationConfig config;
+	NewOutstationTestObject t(config);
 	t.outstation.OnLowerLayerUp();
 
 	t.SendToOutstation("C0 01 3C 02 06"); // Read class 1
-	REQUIRE(t.Read() ==  "C0 81 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "C0 81 80 00");
 }
 
 TEST_CASE(SUITE("ReadClass1WithSOE"))
 {
-	OutstationConfig cfg; cfg.disableUnsol = true;
-	OutstationTestObject t(cfg, DatabaseTemplate::AllTypes(100));
+	NewOutstationConfig config;
+	NewOutstationTestObject t(config, DatabaseTemplate::AllTypes(100), EventBufferConfig::AllTypes(10));
 
 	t.db.staticData.binaries.metadata[0x10].clazz = CLASS_1;
 	t.db.staticData.analogs.metadata[0x17].clazz = CLASS_1;
@@ -63,16 +62,18 @@ TEST_CASE(SUITE("ReadClass1WithSOE"))
 
 	t.SendToOutstation("C0 01 3C 02 06");
 
-	REQUIRE(t.Read() == "E0 81 80 00 20 01 28 01 00 17 00 01 34 12 00 00 02 01 28 01 00 10 00 81 20 01 28 01 00 17 00 01 22 22 00 00");
+	REQUIRE(t.lower.PopWriteAsHex() == "E0 81 80 00 20 01 28 01 00 17 00 01 34 12 00 00 02 01 28 01 00 10 00 81 20 01 28 01 00 17 00 01 22 22 00 00");
 
-	t.SendToOutstation("C0 01 3C 02 06");		// Repeat read class 1
-	REQUIRE(t.Read() ==  "C0 81 80 00");	// Buffer should have been cleared
+	t.SendToOutstation("C0 00");
+
+	t.SendToOutstation("C1 01 3C 02 06");		// Repeat read class 1
+	REQUIRE(t.lower.PopWriteAsHex() == "C1 81 80 00");	// Buffer should have been cleared
 }
 
 TEST_CASE(SUITE("MultipleClasses"))
 {
-	OutstationConfig cfg; cfg.disableUnsol = true;
-	OutstationTestObject t(cfg, DatabaseTemplate::AllTypes(1));
+	NewOutstationConfig config;
+	NewOutstationTestObject t(config, DatabaseTemplate::AllTypes(1), EventBufferConfig::AllTypes(10));
 	t.outstation.OnLowerLayerUp();
 
 	t.db.staticData.binaries.metadata[0].clazz = PointClass::CLASS_1;
@@ -87,28 +88,34 @@ TEST_CASE(SUITE("MultipleClasses"))
 	}
 
 	t.SendToOutstation("C0 01"); // empty READ
-	REQUIRE(t.Read() == "C0 81 8E 00"); // all event bits set + restart
+	REQUIRE(t.lower.PopWriteAsHex() == "C0 81 8E 00"); // all event bits set + restart
 
 	// ------ read 1 event at a time by class, until all events are gone ----
 
-	t.SendToOutstation("C0 01 3C 03 06"); // Class 2
-	REQUIRE(t.Read() == "E0 81 8A 00 20 01 28 01 00 00 00 01 03 00 00 00"); // restart + Class 1/3
+	t.SendToOutstation("C1 01 3C 03 06"); // Class 2
+	REQUIRE(t.lower.PopWriteAsHex() == "E1 81 8A 00 20 01 28 01 00 00 00 01 03 00 00 00"); // restart + Class 1/3
 
-	t.SendToOutstation("C0 01 3C 04 06"); // Class 3
-	REQUIRE(t.Read() == "E0 81 82 00 16 01 28 01 00 00 00 01 07 00 00 00"); // restart + Class 1/3
+	t.SendToOutstation("C1 00");
 
-	t.SendToOutstation("C0 01 3C 02 06"); // Class 1
-	REQUIRE(t.Read() == "E0 81 80 00 02 01 28 01 00 00 00 81"); // restart only
+	t.SendToOutstation("C2 01 3C 04 06"); // Class 3
+	REQUIRE(t.lower.PopWriteAsHex() == "E2 81 82 00 16 01 28 01 00 00 00 01 07 00 00 00"); // restart + Class 1/3
 
-	t.SendToOutstation("C0 01"); // empty READ
-	REQUIRE(t.Read() == "C0 81 80 00"); // restart only
+	t.SendToOutstation("C2 00");
+
+	t.SendToOutstation("C3 01 3C 02 06"); // Class 1
+	REQUIRE(t.lower.PopWriteAsHex() == "E3 81 80 00 02 01 28 01 00 00 00 81"); // restart only
+
+	t.SendToOutstation("C3 00");
+
+	t.SendToOutstation("C4 01"); // empty READ
+	REQUIRE(t.lower.PopWriteAsHex() == "C4 81 80 00"); // restart only
 }
 
-void TestEventRead(const std::function<void(Database& db)>& loadFun, const std::string& request, const std::string& response)
+void TestEventRead(const std::string& request, const std::string& response, const std::function<void(Database& db)>& loadFun)
 {
 
-	OutstationConfig cfg; cfg.disableUnsol = true;
-	OutstationTestObject t(cfg, DatabaseTemplate::AllTypes(1), PointClass::CLASS_1);
+	NewOutstationConfig config;
+	NewOutstationTestObject t(config, DatabaseTemplate::AllTypes(1), EventBufferConfig::AllTypes(10));
 	t.outstation.OnLowerLayerUp();
 
 	{
@@ -117,61 +124,57 @@ void TestEventRead(const std::function<void(Database& db)>& loadFun, const std::
 	}
 
 	t.SendToOutstation(request);
-	REQUIRE(t.Read() ==  response);
+	REQUIRE(t.lower.PopWriteAsHex() ==  response);
 }
 
 
 TEST_CASE(SUITE("ReadGrp2Var0"))
 {
-	TestEventRead(
-	    [](Database & db)
+	auto update = [](Database& db)
 	{
 		db.Update(Binary(false, BQ_ONLINE), 0);
-	},
-	"C0 01 02 00 06", "E0 81 80 00 02 01 28 01 00 00 00 01"
-	);
+	};
+
+	TestEventRead("C0 01 02 00 06", "E0 81 80 00 02 01 28 01 00 00 00 01", update);
 }
 
 TEST_CASE(SUITE("ReadGrp22Var0"))
 {
-	TestEventRead(
-	    [](Database & db)
+	auto update = [](Database & db)
 	{
 		db.Update(Counter(0, CQ_ONLINE), 0);
-	},
-	"C0 01 16 00 06", "E0 81 80 00 16 01 28 01 00 00 00 01 00 00 00 00"
-	);
+	};
+
+	TestEventRead("C0 01 16 00 06", "E0 81 80 00 16 01 28 01 00 00 00 01 00 00 00 00", update);
 }
 
 TEST_CASE(SUITE("ReadGrp32Var0"))
 {
-	TestEventRead(
-	    [](Database & db)
+	auto update = [](Database & db)
 	{
 		db.Update(Analog(0.0, AQ_ONLINE), 0);
-	},
-	"C0 01 20 00 06", "E0 81 80 00 20 01 28 01 00 00 00 01 00 00 00 00"
-	);
+	};
+
+	TestEventRead("C0 01 20 00 06", "E0 81 80 00 20 01 28 01 00 00 00 01 00 00 00 00", update);
 }
 
 /*
 TEST_CASE(SUITE("ReadGrp2Var1"))
 {
-TestEventRead("C0 01 02 01 06", "E0 81 80 00 02 01 17 01 00 01"); // 1 byte count == 1, ONLINE quality
+	TestEventRead("C0 01 02 01 06", "E0 81 80 00 02 01 17 01 00 01"); // 1 byte count == 1, ONLINE quality
 }
 
 TEST_CASE(SUITE("ReadGrp2Var2"))
 {
-TestEventRead("C0 01 02 02 06", "E0 81 80 00 02 02 17 01 00 01 00 00 00 00 00 00"); // 1 byte count == 1, ONLINE quality
+	TestEventRead("C0 01 02 02 06", "E0 81 80 00 02 02 17 01 00 01 00 00 00 00 00 00"); // 1 byte count == 1, ONLINE quality
 }
 
 TEST_CASE(SUITE("ReadGrp2Var3"))
 {
-TestEventRead("C0 01 02 03 06", "E0 81 80 00 33 01 07 01 00 00 00 00 00 00 02 03 17 01 00 01 00 00"); // 1 byte count == 1, ONLINE quality
+	TestEventRead("C0 01 02 03 06", "E0 81 80 00 33 01 07 01 00 00 00 00 00 00 02 03 17 01 00 01 00 00"); // 1 byte count == 1, ONLINE quality
 }
-*/
 
-/*
+
 TEST_CASE(SUITE("ComplexReadSequence"))
 {
 
@@ -206,7 +209,7 @@ rsp.append(" ").append(grp2Var1hdr).append(" 02 01 03 01");
 
 
 t.SendToOutstation(request);
-REQUIRE(t.Read() ==  rsp);
+REQUIRE(t.lower.PopWriteAsHex() ==  rsp);
 }
 */
 
@@ -218,7 +221,7 @@ TEST_CASE(SUITE("NullUnsolOnStartup"))
 	t.outstation.OnLowerLayerUp();
 
 	// Null UNSOL, FIR, FIN, CON, UNS, w/ restart and need-time IIN
-	REQUIRE(t.Read() ==  "F0 82 90 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 90 00");
 }
 
 TEST_CASE(SUITE("UnsolRetryDelay"))
@@ -229,10 +232,10 @@ TEST_CASE(SUITE("UnsolRetryDelay"))
 	t.outstation.OnLowerLayerUp();
 
 	// check for the startup null unsol packet, but fail the transaction
-	REQUIRE(t.Read() ==  "F0 82 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00");
 	REQUIRE(t.mts.NumActive() ==  1); // this should cause a timer to become active
 	REQUIRE(t.mts.DispatchOne());
-	REQUIRE(t.Read() ==  "F0 82 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00");
 }
 
 TEST_CASE(SUITE("UnsolData"))
@@ -253,11 +256,11 @@ TEST_CASE(SUITE("UnsolData"))
 	REQUIRE(t.mts.DispatchOne()); //dispatch the data update event
 
 	t.outstation.OnLowerLayerUp();
-	REQUIRE(t.Read() ==  "F0 82 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00");
 
 	// should immediately try to send another unsol packet,
 	// Grp2Var1, qual 0x17, count 1, index 0, quality+val == 0x01
-	REQUIRE(t.Read() ==  "F0 82 80 00 02 01 17 01 00 01");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00 02 01 17 01 00 01");
 
 	REQUIRE(t.app.NumAPDU() ==  0); //check that no more frags are sent
 }
@@ -311,7 +314,7 @@ TEST_CASE(SUITE("UnsolEventBufferOverflow"))
 
 	// null unsol
 	t.outstation.OnLowerLayerUp();
-	REQUIRE(t.Read() ==  "F0 82 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00");
 
 	// this transaction will overflow the event buffer
 	{
@@ -327,7 +330,7 @@ TEST_CASE(SUITE("UnsolEventBufferOverflow"))
 	// Grp2Var1, qual 0x17, count 2, index 0
 	// The last two values should be published, 0x01 and 0x81 (false and true)
 	// the first value is lost off the front of the buffer
-	REQUIRE(t.Read() ==  "F0 82 80 00 02 01 17 02 00 01 00 81");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00 02 01 17 02 00 01 00 81");
 
 	REQUIRE(t.app.NumAPDU() ==  0); //check that no more frags are sent
 }
@@ -342,7 +345,7 @@ TEST_CASE(SUITE("UnsolMultiFragments"))
 	t.db.SetClass(MeasurementType::BINARY, CLASS_1);
 
 	t.outstation.OnLowerLayerUp();
-	REQUIRE(t.Read() ==  "F0 82 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00");
 
 	REQUIRE(t.app.NumAPDU() ==  0); //check that no more frags are sent
 
@@ -359,9 +362,9 @@ TEST_CASE(SUITE("UnsolMultiFragments"))
 	REQUIRE(t.mts.DispatchOne()); //dispatch the unsol pack timer
 
 	// Only enough room to in the APDU to carry a single value
-	REQUIRE(t.Read() ==  "F0 82 80 00 02 01 17 01 01 01");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00 02 01 17 01 01 01");
 	// should immediately try to send another unsol packet
-	REQUIRE(t.Read() ==  "F0 82 80 00 02 01 17 01 00 01");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00 02 01 17 01 00 01");
 }
 
 // Test that non-read fragments are immediately responded to while waiting for a
@@ -375,7 +378,7 @@ TEST_CASE(SUITE("WriteDuringUnsol"))
 	t.db.SetClass(MeasurementType::BINARY, CLASS_1);
 	t.outstation.OnLowerLayerUp();
 
-	REQUIRE(t.Read() ==  "F0 82 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00");
 
 	{
 		Transaction tr(t.outstation.GetDataObserver());
@@ -384,11 +387,11 @@ TEST_CASE(SUITE("WriteDuringUnsol"))
 
 	t.app.DisableAutoSendCallback();
 	REQUIRE(t.mts.DispatchOne());
-	REQUIRE(t.Read() ==  "F0 82 80 00 02 01 17 01 00 81");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00 02 01 17 01 00 81");
 
 	//now send a write IIN request, and test that the outstation answers immediately
 	t.SendToOutstation("C0 02 50 01 00 07 07 00");
-	REQUIRE(t.Read() ==  "C0 81 00 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "C0 81 00 00");
 
 	t.outstation.OnUnsolSendSuccess();
 	REQUIRE(t.Count() ==  0);
@@ -403,7 +406,7 @@ TEST_CASE(SUITE("ReadDuringUnsol"))
 	t.db.SetClass(MeasurementType::BINARY, CLASS_1);
 	t.outstation.OnLowerLayerUp();
 
-	REQUIRE(t.Read() ==  "F0 82 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00");
 
 	{
 		Transaction tr(t.outstation.GetDataObserver());
@@ -412,12 +415,12 @@ TEST_CASE(SUITE("ReadDuringUnsol"))
 
 	t.app.DisableAutoSendCallback();
 	REQUIRE(t.mts.DispatchOne());
-	REQUIRE(t.Read() ==  "F0 82 80 00 02 01 17 01 00 81");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00 02 01 17 01 00 81");
 
 	t.SendToOutstation("C0 01 3C 02 06");
 
 	t.outstation.OnUnsolSendSuccess();
-	REQUIRE(t.Read() ==  "C0 81 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "C0 81 80 00");
 }
 
 TEST_CASE(SUITE("ReadWriteDuringUnsol"))
@@ -429,7 +432,7 @@ TEST_CASE(SUITE("ReadWriteDuringUnsol"))
 	t.db.SetClass(MeasurementType::BINARY, CLASS_1);
 	t.outstation.OnLowerLayerUp();
 
-	REQUIRE(t.Read() ==  "F0 82 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00");
 
 	{
 		Transaction tr(t.outstation.GetDataObserver());
@@ -438,14 +441,14 @@ TEST_CASE(SUITE("ReadWriteDuringUnsol"))
 
 	t.app.DisableAutoSendCallback();
 	REQUIRE(t.mts.DispatchOne());
-	REQUIRE(t.Read() ==  "F0 82 80 00 02 01 17 01 00 81");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00 02 01 17 01 00 81");
 
 	t.SendToOutstation("C0 01 3C 01 06");
 
 	//now send a write IIN request, and test that the outstation answers immediately
 	t.SendToOutstation("C0 02 50 01 00 07 07 00");
 	t.outstation.OnUnsolSendSuccess();
-	REQUIRE(t.Read() ==  "C0 81 00 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "C0 81 00 00");
 }
 
 TEST_CASE(SUITE("UnsolEnable"))
@@ -456,7 +459,7 @@ TEST_CASE(SUITE("UnsolEnable"))
 	t.db.SetClass(MeasurementType::BINARY, CLASS_1);
 	t.outstation.OnLowerLayerUp();
 
-	REQUIRE(t.Read() ==  "F0 82 80 00"); //Null UNSOL
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00"); //Null UNSOL
 
 	// do a transaction to show that unsol data is not being reported yet
 	{
@@ -468,10 +471,10 @@ TEST_CASE(SUITE("UnsolEnable"))
 	REQUIRE(t.app.NumAPDU() ==  0); //check that no unsol packets are generated
 
 	t.SendToOutstation("C0 14 3C 02 06");
-	REQUIRE(t.Read() ==  "C0 81 80 00");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "C0 81 80 00");
 
 	// should automatically send the previous data as unsol
-	REQUIRE(t.Read() ==  "F0 82 80 00 02 01 17 01 00 01");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00 02 01 17 01 00 01");
 }
 
 TEST_CASE(SUITE("UnsolEnableBadObject"))
@@ -482,7 +485,7 @@ TEST_CASE(SUITE("UnsolEnableBadObject"))
 	t.db.SetClass(MeasurementType::BINARY, CLASS_1);
 	t.outstation.OnLowerLayerUp();
 
-	REQUIRE(t.Read() ==  "F0 82 80 00"); //Null UNSOL
+	REQUIRE(t.lower.PopWriteAsHex() ==  "F0 82 80 00"); //Null UNSOL
 
 	// do a transaction to show that unsol data is not being reported yet
 	{
@@ -494,7 +497,7 @@ TEST_CASE(SUITE("UnsolEnableBadObject"))
 	REQUIRE(t.app.NumAPDU() ==  0); //check that no unsol packets are generated
 
 	t.SendToOutstation("C0 14 01 02 06");
-	REQUIRE(t.Read() ==  "C0 81 80 01");
+	REQUIRE(t.lower.PopWriteAsHex() ==  "C0 81 80 01");
 }
 
 TEST_CASE(SUITE("UnsolEnableDisableFailure"))
@@ -506,7 +509,7 @@ TEST_CASE(SUITE("UnsolEnableDisableFailure"))
 	t.outstation.OnLowerLayerUp();
 
 	t.SendToOutstation("C0 14 3C 02 06");
-	REQUIRE(t.Read() ==  "C0 81 80 01"); //FUNC_NOT_SUPPORTED
+	REQUIRE(t.lower.PopWriteAsHex() ==  "C0 81 80 01"); //FUNC_NOT_SUPPORTED
 }
 */
 

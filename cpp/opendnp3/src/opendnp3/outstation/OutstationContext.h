@@ -29,9 +29,11 @@
 #include "opendnp3/StaticSizeConfiguration.h"
 #include "opendnp3/outstation/Database.h"
 #include "opendnp3/outstation/ResponseContext.h"
+#include "opendnp3/outstation/NewOutstationConfig.h"
 #include "opendnp3/app/IINField.h"
 #include "opendnp3/app/ObjectWriter.h"
 #include "opendnp3/app/APDUHeader.h"
+#include "opendnp3/app/APDUResponse.h"
 #include "opendnp3/outstation/ICommandHandler.h"
 #include "opendnp3/outstation/ITimeWriteHandler.h"
 
@@ -46,7 +48,8 @@ class OutstationContext
 
 	static uint8_t NextSeq(uint8_t seq) { return (seq + 1) % 16; }
 
-	OutstationContext(	openpal::IExecutor& executor,
+	OutstationContext(	const NewOutstationConfig& config,
+						openpal::IExecutor& executor,
 						openpal::LogRoot& root, 
 						openpal::ILowerLayer& lower,
 						ICommandHandler& commandHandler,
@@ -56,6 +59,7 @@ class OutstationContext
 
 	// ------ Unchanging variables and self managing variables -------
 
+	OutstationParams params;
 	openpal::Logger logger;
 	openpal::IExecutor* pExecutor;
 	openpal::ILowerLayer* pLower;
@@ -64,15 +68,11 @@ class OutstationContext
 	Database* pDatabase;
 	OutstationEventBuffer eventBuffer;
 
-	// ------ Static bufers -------
-
-	openpal::StaticBuffer<sizes::MAX_RX_APDU_SIZE> rxBuffer;
-	openpal::StaticBuffer<sizes::MAX_TX_APDU_SIZE> txBuffer;
-
 	// ------ Dynamic "state", i.e. things that must be managed or cleanup on close ------
 	
 	bool isOnline;
 	bool isSending;
+	bool solConfirmWait;
 	bool firstValidRequestAccepted;
 	IINField staticIIN;
 
@@ -92,14 +92,40 @@ class OutstationContext
 
 	// ------ Helper methods for dealing with state ------
 
+	IINField GetDynamicIIN();
+
+	APDUResponse StartNewResponse();
+	bool RecordLastRequest(const openpal::ReadOnlyBuffer& fragment);
+
 	void SetOnline();
 	void SetOffline();
 
 	void Select();
 	bool IsOperateSequenceValid();
+	bool IsIdle();
+
 	bool CancelConfirmTimer();
-	
+
+	bool IsExpectingSolConfirm();
+
+	template <class Lambda>
+	bool StartConfirmTimer(const Lambda& lamda);
+
+	private:
+
+	bool StartConfirmTimerWithRunnable(const openpal::Runnable& runnable);
+
+	// ------ Static bufers -------
+
+	openpal::StaticBuffer<sizes::MAX_RX_APDU_SIZE> rxBuffer;
+	openpal::StaticBuffer<sizes::MAX_TX_APDU_SIZE> txBuffer;
 };
+
+template <class Lambda>
+bool OutstationContext::StartConfirmTimer(const Lambda& lambda)
+{	
+	return StartConfirmTimerWithRunnable(openpal::Bind(lambda));
+}
 
 
 }

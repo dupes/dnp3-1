@@ -24,6 +24,7 @@
 #include <opendnp3/outstation/Outstation.h>
 #include <opendnp3/transport/TransportStack.h>
 #include <opendnp3/outstation/StaticallyAllocatedDatabase.h>
+#include <opendnp3/outstation/DynamicallyAllocatedDatabase.h>
 #include <opendnp3/outstation/StaticallyAllocatedEventBuffer.h>
 #include <opendnp3/outstation/NewOutstation.h>
 #include <opendnp3/LogLevels.h>
@@ -45,6 +46,8 @@ using namespace opendnp3;
 using namespace openpal;
 using namespace asiopal;
 
+void ToggleBinaryEvery(uint16_t milliseconds, IExecutor* pExecutor, Database* pDatabase, bool value, bool update);
+
 int main(int argc, char* argv[])
 {
 	cout << sizeof(TransportLayer) << " - TL " << endl;
@@ -65,18 +68,20 @@ int main(int argc, char* argv[])
 
 	PhysicalLayerAsyncTCPServer server(root, &service, "0.0.0.0", 20000);
 	LinkLayerRouter router(root, &server, TimeDuration::Seconds(1), TimeDuration::Seconds(60));
-	
-	LinkConfig config(false, false);
-	TransportStack stack(root, &executor, config);
+		
+	TransportStack stack(root, &executor, LinkConfig(false, false));
 
-	StaticallyAllocatedDatabase<5, 5, 5, 5, 5, 5, 5> staticBuffers;
+	//StaticallyAllocatedDatabase<5, 5, 5, 5, 5, 5, 5> staticBuffers;
+	DynamicallyAllocatedDatabase staticBuffers(DatabaseTemplate::BinaryOnly(5));
 	StaticallyAllocatedEventBuffer<10, 10, 10, 10, 10, 10, 10> eventBuffers;
 
 	Database database(staticBuffers.GetFacade());
 
 	SimpleCommandHandler commandHandler(CommandStatus::SUCCESS);
 
-	NewOutstation outstation(executor, root, stack.transport, commandHandler, NullTimeWriteHandler::Inst(), database, eventBuffers.GetFacade());
+	NewOutstationConfig config;	
+	config.params.maxTxFragSize = 10;
+	NewOutstation outstation(config, executor, root, stack.transport, commandHandler, NullTimeWriteHandler::Inst(), database, eventBuffers.GetFacade());
 
 	stack.transport.SetAppLayer(&outstation);
 
@@ -85,8 +90,21 @@ int main(int argc, char* argv[])
 
 	router.Enable(&stack.link);
 
+	ToggleBinaryEvery(3000, &executor, &database, true, false);
+
 	// Start dispatching events
 	service.run();
 
 	return 0;
+}
+
+void ToggleBinaryEvery(uint16_t milliseconds, IExecutor* pExecutor, Database* pDatabase, bool value, bool update)
+{
+	if (update)
+	{
+		pDatabase->Update(Binary(value), 0);
+	}
+
+	auto lambda = [pExecutor, pDatabase, value, milliseconds]() { ToggleBinaryEvery(milliseconds, pExecutor, pDatabase, !value, true); };
+	pExecutor->Start(TimeDuration::Milliseconds(milliseconds), Bind(lambda));
 }

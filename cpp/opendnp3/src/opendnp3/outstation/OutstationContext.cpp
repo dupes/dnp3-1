@@ -21,12 +21,18 @@
 
 #include "OutstationContext.h"
 
+#include "opendnp3/StaticSizeConfiguration.h"
+#include "opendnp3/LogLevels.h"
+
+#include <openpal/LogMacros.h>
+
 using namespace openpal;
 
 namespace opendnp3
 {
 
 OutstationContext::OutstationContext(
+		const NewOutstationConfig& config,
 		IExecutor& executor,
 		LogRoot& root,
 		ILowerLayer& lower,
@@ -35,6 +41,7 @@ OutstationContext::OutstationContext(
 		Database& database,
 		const EventBufferFacade& buffers) :
 	
+	params(config.params),
 	logger(root.GetLogger()),	
 	pExecutor(&executor),
 	pLower(&lower),
@@ -44,6 +51,7 @@ OutstationContext::OutstationContext(
 	eventBuffer(buffers),
 	isOnline(false),
 	isSending(false),
+	solConfirmWait(false),
 	firstValidRequestAccepted(false),
 	pConfirmTimer(nullptr),
 	rxFragCount(0),		
@@ -52,10 +60,61 @@ OutstationContext::OutstationContext(
 	solSeqN(0),
 	expectedConfirmSeq(0),
 	unsolSeq(0),
-	rspContext(&database, &eventBuffer, StaticResponseTypes())	
+	rspContext(&database, &eventBuffer, StaticResponseTypes(config.defaultStaticResponses))	
 {
 	pDatabase->SetEventBuffer(eventBuffer);
 	staticIIN.Set(IINBit::DEVICE_RESTART);
+
+	if (params.maxTxFragSize < sizes::MIN_APDU_SIZE)
+	{
+		FORMAT_LOG_BLOCK(logger, flags::WARN, 
+			"setting maxTxFragSize of %u to minimum of %u", 
+			static_cast<unsigned int>(params.maxTxFragSize), 
+			static_cast<unsigned int>(sizes::MIN_APDU_SIZE));
+
+		params.maxTxFragSize = sizes::MIN_APDU_SIZE;
+	}	
+}
+
+IINField OutstationContext::GetDynamicIIN()
+{
+	IINField ret;
+	auto tracker = eventBuffer.UnselectedEvents();
+	if (tracker.class1.HasEvents())
+	{
+		ret.Set(IINBit::CLASS1_EVENTS);
+	}
+	if (tracker.class2.HasEvents())
+	{
+		ret.Set(IINBit::CLASS2_EVENTS);
+	}
+	if (tracker.class3.HasEvents())
+	{
+		ret.Set(IINBit::CLASS3_EVENTS);
+	}
+	if (eventBuffer.IsOverflown())
+	{
+		ret.Set(IINBit::EVENT_BUFFER_OVERFLOW);
+	}
+	return ret;
+}
+
+APDUResponse OutstationContext::StartNewResponse()
+{	
+	return APDUResponse(txBuffer.GetWriteBuffer(params.maxTxFragSize));
+}
+
+bool OutstationContext::RecordLastRequest(const openpal::ReadOnlyBuffer& fragment)
+{
+	if (fragment.Size() <= rxBuffer.Size())
+	{
+		lastValidRequest = fragment.CopyTo(rxBuffer.Buffer());
+		return true;
+	}
+	else
+	{
+		return false;
+	}
 }
 
 void OutstationContext::SetOnline()
@@ -67,7 +126,9 @@ void OutstationContext::SetOffline()
 {
 	isOnline = false;
 	isSending = false;
+	solConfirmWait = false;
 	firstValidRequestAccepted = false;
+	rspContext.Reset();
 	CancelConfirmTimer();
 }
 
@@ -83,6 +144,11 @@ bool OutstationContext::IsOperateSequenceValid()
 	return (rxFragCount == operateExpectedFragCount) && (solSeqN == operateExpectedSeq);	
 }
 
+bool OutstationContext::IsIdle()
+{
+	return isOnline && (!isSending) && (!solConfirmWait);
+}
+
 bool OutstationContext::CancelConfirmTimer()
 {
 	if (pConfirmTimer)
@@ -96,6 +162,25 @@ bool OutstationContext::CancelConfirmTimer()
 		return false;
 	}
 }
+
+bool OutstationContext::IsExpectingSolConfirm()
+{
+	return (!isSending && solConfirmWait && pConfirmTimer);	
+}
+
+bool OutstationContext::StartConfirmTimerWithRunnable(const Runnable& runnable)
+{
+	if (pConfirmTimer)
+	{
+		return false;
+	}
+	else
+	{
+		pConfirmTimer = pExecutor->Start(TimeDuration::Milliseconds(5000), runnable); // todo make this configurable
+		return true;
+	}
+}
+
 
 }
 

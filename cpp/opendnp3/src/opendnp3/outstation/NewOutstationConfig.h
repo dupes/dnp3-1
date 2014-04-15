@@ -18,33 +18,42 @@
  * may have been made to this file. Automatak, LLC licenses these modifications
  * to you under the terms of the License.
  */
+#ifndef __NEW_OUTSTATION_CONFIG_H_
+#define __NEW_OUTSTATION_CONFIG_H_
 
-#include "NewOutstationTestObject.h"
-#include "BufferHelpers.h"
+#include <openpal/TimeDuration.h>
 
-using namespace openpal;
+#include "opendnp3/outstation/OutstationParams.h"
+#include "opendnp3/outstation/StaticResponseConfig.h"
+#include "opendnp3/outstation/EventResponseConfig.h"
+
 
 namespace opendnp3
 {
 
-NewOutstationTestObject::NewOutstationTestObject(const NewOutstationConfig& config, const DatabaseTemplate& dbTemplate, const EventBufferConfig& ebConfig) :
-	log(),
-	exe(),
-	lower(log.root),
-	dbBuffers(dbTemplate),
-	eventBuffers(ebConfig),
-	db(dbBuffers.GetFacade()),
-	cmdHandler(CommandStatus::SUCCESS),
-	timeHandler([this](const UTCTimestamp& ts){ timestamps.push_back(ts); }),
-	outstation(config, exe, log.root, lower, cmdHandler, timeHandler, db, eventBuffers.GetFacade())
+/** Configuration information for a dnp3 outstation (outstation)
+
+Used as both input describing the startup configuration of the outstation, and as configuration state of mutable properties (i.e. unsolicited responses).
+
+Major feature areas are unsolicited responses, time synchronization requests, event buffer limits, and the DNP3 object/variations to use by default
+when the master requests class data or variation 0.
+
+*/
+struct NewOutstationConfig
 {
-	lower.SetUpperLayer(&outstation);
+	/// Various parameters that govern outstation behavior
+	OutstationParams params;
+
+	/// Default statis response types
+	StaticResponseConfig defaultStaticResponses;
+	
+	/// Default event response types
+	EventResponseConfig defaultEventResponses;
+};
+
 }
 
-void NewOutstationTestObject::SendToOutstation(const std::string& hex)
-{
-	HexSequence hs(hex);
-	outstation.OnReceive(hs.ToReadOnly());
-}
 
-}
+
+#endif
+

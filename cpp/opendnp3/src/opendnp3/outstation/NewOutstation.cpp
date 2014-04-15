@@ -40,6 +40,7 @@ namespace opendnp3
 {
 
 NewOutstation::NewOutstation(
+		const NewOutstationConfig& config,
 		IExecutor& executor,
 		openpal::LogRoot& root,
 		openpal::ILowerLayer& lower,
@@ -47,7 +48,7 @@ NewOutstation::NewOutstation(
 		ITimeWriteHandler& timeWriteHandler,
 		Database& database,
 		const EventBufferFacade& buffers) :
-		context(executor, root, lower, commandHandler, timeWriteHandler, database, buffers)
+		context(config, executor, root, lower, commandHandler, timeWriteHandler, database, buffers)
 {
 	
 }
@@ -86,26 +87,81 @@ void NewOutstation::OnReceive(const openpal::ReadOnlyBuffer& fragment)
 		if (result == APDUHeaderParser::Result::OK)
 		{	
 			// outstations only have to process single fragment messages
-			if (request.control.FIR && request.control.FIN)
+			if ((request.control.FIR && request.control.FIN) && !request.control.CON)
 			{
 				if (request.control.UNS)
 				{
-					this->OnReceiveUnsol(request);
+					if (request.function == FunctionCode::CONFIRM)
+					{
+						this->OnReceiveUnsolConfirm(request);
+					}
+					else
+					{
+						SIMPLE_LOG_BLOCK(context.logger, flags::WARN, "Receive non-confirm unsol message");
+					}					
 				}
 				else
 				{
-					this->OnReceiveSol(request, fragment);
+					if (request.function == FunctionCode::CONFIRM)
+					{
+						this->OnReceiveSolConfirm(request);
+					}
+					else
+					{
+						this->OnReceiveSolRequest(request, fragment);
+					}					
 				}
 			}
 			else
 			{
-				FORMAT_LOG_BLOCK(context.logger, flags::WARN, "Ignoring fragment with FIR: %u FIN %u", request.control.FIN, request.control.FIN);
+				FORMAT_LOG_BLOCK(context.logger, flags::WARN,
+					"Ignoring fragment with FIR: %u FIN: %u CON: %u", 
+					request.control.FIN, 
+					request.control.FIN,
+					request.control.CON);
 			}
-		}		
+		}
+		else
+		{
+			SIMPLE_LOG_BLOCK(context.logger, flags::ERR, "ignoring malformed request header");
+		}
 	}
 	else
 	{
 		SIMPLE_LOG_BLOCK(context.logger, flags::ERR, "ignoring received data while offline");
+	}
+}
+
+void NewOutstation::OnReceiveSolConfirm(const APDURecord& request)
+{
+	if (context.IsExpectingSolConfirm())
+	{
+		if (request.control.SEQ == context.expectedConfirmSeq)
+		{
+			context.CancelConfirmTimer();
+			context.solConfirmWait = false;
+			context.eventBuffer.Clear(); // clear selected events
+			if (context.rspContext.IsComplete())
+			{
+				this->EnterIdleState();
+			}
+			else // Continue response
+			{								
+				auto response = context.StartNewResponse();
+				response.SetFunction(FunctionCode::RESPONSE);				
+				openpal::Transaction tx(context.pDatabase);
+				context.pDatabase->DoubleBuffer();
+				auto control = context.rspContext.Load(response);
+				control.SEQ = OutstationContext::NextSeq(request.control.SEQ);
+				response.SetControl(control);
+				response.SetIIN(context.staticIIN | context.GetDynamicIIN());
+				this->BeginTransmission(control.SEQ, control.CON, response.ToReadOnly());
+			}			
+		}
+	}
+	else
+	{
+		SIMPLE_LOG_BLOCK(context.logger, flags::ERR, "Received unexpected solicited confirm");
 	}
 }
 
@@ -114,6 +170,15 @@ void NewOutstation::OnSendResult(bool isSucccess)
 	if (context.isOnline && context.isSending)
 	{
 		context.isSending = false;
+		if(context.solConfirmWait)
+		{
+			auto onTimeout = [this](){ this->OnSolConfirmTimeout();  };
+			context.StartConfirmTimer(onTimeout);
+		}
+		else
+		{
+			this->EnterIdleState();
+		}
 	}
 	else
 	{
@@ -121,60 +186,97 @@ void NewOutstation::OnSendResult(bool isSucccess)
 	}
 }
 
-void NewOutstation::OnReceiveSol(const APDURecord& request, const openpal::ReadOnlyBuffer& fragment)
+void NewOutstation::OnSolConfirmTimeout()
 {
-	if (context.isSending)
+	context.pConfirmTimer = nullptr;
+
+	if (context.solConfirmWait)
 	{
-		// TODO - buffer the data?
+		context.solConfirmWait = false;
+		context.eventBuffer.Reset();
+		context.rspContext.Reset();		
 	}
 	else
 	{
+		// TODO - some kind of log error?
+	}
+}
+
+void NewOutstation::EnterIdleState()
+{
+	// post these calls so the stack can unwind
+	auto lambda = [this]() { this->CheckForIdleState(); };
+	context.pExecutor->PostLambda(lambda);
+}
+
+void NewOutstation::CheckForIdleState()
+{
+	if (context.IsIdle())
+	{
+		// check for idle actions
+	}
+}
+
+void NewOutstation::OnReceiveSolRequest(const APDURecord& request, const openpal::ReadOnlyBuffer& fragment)
+{
+	if (context.IsIdle())
+	{
 		if (context.firstValidRequestAccepted)
 		{
-			if (context.solSeqN == request.control.SEQ) 
+			if (context.solSeqN == request.control.SEQ)
 			{
-				if (context.lastValidRequest.Equals(fragment)) 
+				if (context.lastValidRequest.Equals(fragment))
 				{
 					// duplicate message so just send the same response without processing
-					this->BeginTransmission(request.control.SEQ, context.lastResponse);
+					context.isSending = true;
+					context.pLower->BeginTransmit(context.lastResponse);					
 				}
 				else // new operation with same SEQ
 				{
 					if (request.function != FunctionCode::SELECT) // TODO - Ask why select is special?
 					{
 						this->ProcessRequest(request, fragment);
-					}					
+					}
 				}
 			}
 			else  // completely new sequence #
-			{
+			{				
+				context.solSeqN = request.control.SEQ;
 				this->ProcessRequest(request, fragment);
 			}
 		}
 		else
 		{
-			context.firstValidRequestAccepted = true;
+			context.solSeqN = request.control.SEQ;
+			context.firstValidRequestAccepted = true;		
 			this->ProcessRequest(request, fragment);
-		}		
+		}	
+	}
+	else
+	{
+		// TODO - not idle
 	}		
 }
 
 void NewOutstation::ProcessRequest(const APDURecord& request, const openpal::ReadOnlyBuffer& fragment)
-{
-	context.lastValidRequest = fragment.CopyTo(context.rxBuffer.Buffer());
-	APDUResponse response(context.txBuffer.GetWriteBuffer());
-	response.SetFunction(FunctionCode::RESPONSE);
-	response.SetControl(request.control.ToByte());
+{	
+	context.RecordLastRequest(fragment);
+	auto response = context.StartNewResponse();
+	response.SetFunction(FunctionCode::RESPONSE);	
+	response.SetControl(request.control);
 	IINField iin = BuildResponse(request, response);		
-	response.SetIIN(iin | context.staticIIN);
-	this->BeginTransmission(request.control.SEQ, response.ToReadOnly());	
+	response.SetIIN(iin | context.staticIIN | context.GetDynamicIIN());
+	this->BeginTransmission(request.control.SEQ, response.GetControl().CON, response.ToReadOnly());	
 }
 
-void NewOutstation::BeginTransmission(uint8_t seq, const ReadOnlyBuffer& response)
+void NewOutstation::BeginTransmission(uint8_t seq, bool confirm, const ReadOnlyBuffer& response)
 {
-	context.isSending = true;
-	context.solSeqN = seq;
-	context.expectedConfirmSeq = seq;
+	context.isSending = true;	
+	if (confirm)
+	{
+		context.expectedConfirmSeq = seq;
+		context.solConfirmWait = true;
+	}	
 	context.lastResponse = response;
 	context.pLower->BeginTransmit(response);
 	/*
@@ -184,10 +286,10 @@ void NewOutstation::BeginTransmission(uint8_t seq, const ReadOnlyBuffer& respons
 	*/
 }
 
-void NewOutstation::OnReceiveUnsol(const APDURecord& record)
+void NewOutstation::OnReceiveUnsolConfirm(const APDURecord& record)
 {
 	// can only be a confirm? ignore for now
-	SIMPLE_LOG_BLOCK(context.logger, flags::WARN, "Unexpected unsolicited message");
+	SIMPLE_LOG_BLOCK(context.logger, flags::WARN, "Unexpected unsolicited confirm");
 }
 
 IINField NewOutstation::BuildResponse(const APDURecord& request, APDUResponse& response)
@@ -204,6 +306,8 @@ IINField NewOutstation::BuildResponse(const APDURecord& request, APDUResponse& r
 			return HandleOperate(request, response);
 		case(FunctionCode::DIRECT_OPERATE) :
 			return HandleDirectOperate(request, response);
+		case(FunctionCode::DELAY_MEASURE) :
+			return HandleDelayMeasure(request, response);
 		default:
 			return IINField(IINBit::FUNC_NOT_SUPPORTED);
 	}	
@@ -221,7 +325,9 @@ IINField NewOutstation::HandleRead(const APDURecord& request, APDUResponse& resp
 		// this ensures that an multi-fragmented responses see a consistent snapshot
 		openpal::Transaction tx(context.pDatabase);
 		context.pDatabase->DoubleBuffer();
-		context.rspContext.Load(response);
+		auto control = context.rspContext.Load(response);
+		control.SEQ = request.control.SEQ;
+		response.SetControl(control);
 		return handler.Errors();
 	}
 	else
@@ -256,7 +362,7 @@ IINField NewOutstation::HandleDirectOperate(const APDURecord& request, APDURespo
 	else
 	{
 		CommandActionAdapter adapter(context.pCommandHandler, false);
-		CommandResponseHandler handler(context.logger, 1, &adapter, response);	// TODO support multiple controls
+		CommandResponseHandler handler(context.logger, context.params.maxControlsPerRequest, &adapter, response);
 		auto result = APDUParser::ParseTwoPass(request.objects, &handler, &context.logger);
 		return IINFromParseResult(result);
 	}
@@ -273,7 +379,7 @@ IINField NewOutstation::HandleSelect(const APDURecord& request, APDUResponse& re
 	else
 	{		
 		CommandActionAdapter adapter(context.pCommandHandler, true);		
-		CommandResponseHandler handler(context.logger, 1, &adapter, response); // TODO support more controls
+		CommandResponseHandler handler(context.logger, context.params.maxControlsPerRequest, &adapter, response);
 		auto result = APDUParser::ParseTwoPass(request.objects, &handler, &context.logger);
 		if (result == APDUParser::Result::OK)
 		{
@@ -307,7 +413,7 @@ IINField NewOutstation::HandleOperate(const APDURecord& request, APDUResponse& r
 		if (context.IsOperateSequenceValid())
 		{				
 			auto elapsed = context.pExecutor->GetTime().milliseconds - context.selectTime.milliseconds;
-			if (elapsed < 5000) // TODO - make timeout configurable
+			if (elapsed < context.params.selectTimeout.GetMilliseconds())
 			{
 				if (context.lastValidRequest.Size() >= 2)
 				{
@@ -316,7 +422,7 @@ IINField NewOutstation::HandleOperate(const APDURecord& request, APDUResponse& r
 					if (copy.Equals(request.objects))
 					{
 						CommandActionAdapter adapter(context.pCommandHandler, false);
-						CommandResponseHandler handler(context.logger, 1, &adapter, response);
+						CommandResponseHandler handler(context.logger, context.params.maxControlsPerRequest, &adapter, response);
 						auto result = APDUParser::ParseTwoPass(request.objects, &handler, &context.logger);
 						return IINFromParseResult(result);
 					}
@@ -343,10 +449,26 @@ IINField NewOutstation::HandleOperate(const APDURecord& request, APDUResponse& r
 	}
 }
 
+IINField NewOutstation::HandleDelayMeasure(const APDURecord& request, APDUResponse& response)
+{
+	if (request.objects.IsEmpty())
+	{
+		auto writer = response.GetWriter();
+		Group52Var2 value = { 0 }; 	// respond with 0 time delay
+		writer.WriteSingleValue<UInt8, Group52Var2>(QualifierCode::UINT8_CNT, value);
+		return IINField::Empty;
+	}
+	else
+	{
+		// there shouldn't be any trailing headers in delay measure request, no need to even parse
+		return IINField(IINBit::FUNC_NOT_SUPPORTED);
+	}
+}
+
 IINField NewOutstation::HandleCommandWithConstant(const APDURecord& request, APDUResponse& response, CommandStatus status)
 {
 	ConstantCommandAction constant(status);
-	CommandResponseHandler handler(context.logger, 1, &constant, response); // TODO, make controls
+	CommandResponseHandler handler(context.logger, context.params.maxControlsPerRequest, &constant, response);
 	auto result = APDUParser::ParseTwoPass(request.objects, &handler, &context.logger);
 	return IINFromParseResult(result);
 }

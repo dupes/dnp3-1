@@ -32,7 +32,8 @@ class NewOutstation : public openpal::IUpperLayer
 {
 	public:
 
-	NewOutstation(	openpal::IExecutor& executor, 
+	NewOutstation(	const NewOutstationConfig& config,
+					openpal::IExecutor& executor, 
 					openpal::LogRoot& root, 
 					openpal::ILowerLayer& lower,
 					ICommandHandler& commandHandler,
@@ -50,17 +51,27 @@ class NewOutstation : public openpal::IUpperLayer
 	
 	private:
 
+	// ------ Internal events ------
+
+	void OnSolConfirmTimeout();
+	 
+	void EnterIdleState();
+
+	void CheckForIdleState();
+
 	OutstationContext context;
 
 	// ------ Private methods ------
 
-	void OnReceiveSol(const APDURecord& request, const openpal::ReadOnlyBuffer& fragment);
+	void OnReceiveSolConfirm(const APDURecord& request);
 
-	void OnReceiveUnsol(const APDURecord& record);
+	void OnReceiveUnsolConfirm(const APDURecord& request);
+
+	void OnReceiveSolRequest(const APDURecord& request, const openpal::ReadOnlyBuffer& fragment);	
 
 	void ProcessRequest(const APDURecord& record, const openpal::ReadOnlyBuffer& fragment);
 
-	void BeginTransmission(uint8_t seq, const openpal::ReadOnlyBuffer& response);	
+	void BeginTransmission(uint8_t seq, bool confirm, const openpal::ReadOnlyBuffer& response);
 
 	// ------ Function handlers ------
 	
@@ -75,6 +86,8 @@ class NewOutstation : public openpal::IUpperLayer
 	IINField HandleOperate(const APDURecord& request, APDUResponse& response);
 
 	IINField HandleDirectOperate(const APDURecord& request, APDUResponse& response);
+
+	IINField HandleDelayMeasure(const APDURecord& request, APDUResponse& response);
 
 	// -------- Function handler helpers
 

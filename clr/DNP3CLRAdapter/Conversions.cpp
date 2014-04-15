@@ -325,23 +325,23 @@ opendnp3::OutstationConfig Conversions::convertConfig(OutstationConfig^ config)
 {
 	opendnp3::OutstationConfig sc;
 
-	sc.mDisableUnsol = config->disableUnsol;
-	sc.mMaxControls = config->maxControls;
-	sc.mUnsolMask = convertClassMask(config->unsolMask);
-	sc.mAllowTimeSync = config->allowTimeSync;
-	sc.mTimeSyncPeriod = convertMilliseconds(config->timeSyncPeriodMs);
-	sc.mUnsolPackDelay = convertMilliseconds(config->unsolPackDelayMs);
-	sc.mUnsolRetryDelay = convertMilliseconds(config->unsolRetryDelayMs);
-	sc.mSelectTimeout = convertMilliseconds(config->selectTimeoutMs);
-	sc.mMaxFragSize = config->maxFragSize;
-	sc.mStaticBinary = convert(config->staticBinary);
-	sc.mStaticAnalog = convert(config->staticAnalog);
-	sc.mStaticCounter = convert(config->staticCounter);
-	sc.mStaticFrozenCounter = convert(config->staticFrozenCounter);
-	sc.mStaticAnalogOutputStatus = convert(config->staticAnalogOutputStatus);
-	sc.mEventBinary = convert(config->eventBinary);
-	sc.mEventAnalog = convert(config->eventAnalog);
-	sc.mEventCounter = convert(config->eventCounter);
+	sc.disableUnsol = config->disableUnsol;
+	sc.maxControls = config->maxControls;
+	sc.unsolMask = convertClassMask(config->unsolMask);
+	sc.allowTimeSync = config->allowTimeSync;
+	sc.timeSyncPeriod = convertMilliseconds(config->timeSyncPeriodMs);
+	sc.unsolPackDelay = convertMilliseconds(config->unsolPackDelayMs);
+	sc.unsolRetryDelay = convertMilliseconds(config->unsolRetryDelayMs);
+	sc.selectTimeout = convertMilliseconds(config->selectTimeoutMs);
+	sc.maxFragSize = config->maxFragSize;
+	sc.staticDefaults.binary = convert(config->staticBinary);
+	sc.staticDefaults.analog = convert(config->staticAnalog);
+	sc.staticDefaults.counter = convert(config->staticCounter);
+	sc.staticDefaults.frozenCounter = convert(config->staticFrozenCounter);
+	sc.staticDefaults.analogOutputStatus = convert(config->staticAnalogOutputStatus);
+	sc.eventDefaults.binary = convert(config->eventBinary);
+	sc.eventDefaults.analog = convert(config->eventAnalog);
+	sc.eventDefaults.counter = convert(config->eventCounter);
 
 	return sc;
 }
