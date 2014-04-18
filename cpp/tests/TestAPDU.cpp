@@ -420,6 +420,23 @@ BOOST_AUTO_TEST_CASE(UnknownGroupVar)
 	BOOST_REQUIRE(gotIt);
 }
 
+BOOST_AUTO_TEST_CASE(ReadVar0)
+{
+	APDU frag;
+	HexSequence hs("C5 01 28 00 28 02 00 00 00 01 00");  //obj 40 var 0, 2 byte count and index
+	frag.Write(hs, hs.Size());
+
+	int code = -1;
+	try {
+		frag.Interpret();
+	}
+	catch(Exception ex) {
+		code = ex.ErrorCode();
+	}
+
+	BOOST_REQUIRE_EQUAL(code, -1);
+}
+
 BOOST_AUTO_TEST_CASE(StartStopMismach)
 {
 	APDU frag;

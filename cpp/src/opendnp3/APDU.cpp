@@ -313,7 +313,6 @@ size_t APDU::GetNumObjects(const IObjectHeader* apHeader, const uint8_t* apStart
 
 size_t APDU::GetPrefixSizeAndValidate(QualifierCode aCode, ObjectTypes aType)
 {
-
 	switch(MACRO_QUAL_OBJ_RADIX(aCode, aType)) {
 		//allowed cases with no prefix
 	case(MACRO_QUAL_OBJ_RADIX(QC_ALL_OBJ, OT_PLACEHOLDER)):
@@ -341,8 +340,14 @@ size_t APDU::GetPrefixSizeAndValidate(QualifierCode aCode, ObjectTypes aType)
 
 		//Objects prefixed with an index can only be OT_STATIC or OT_VARIABLE
 	case(MACRO_QUAL_OBJ_RADIX(QC_1B_CNT_1B_INDEX, OT_FIXED)):	return 1;
+	case(MACRO_QUAL_OBJ_RADIX(QC_1B_CNT_1B_INDEX, OT_PLACEHOLDER)):	return 1;
+
 	case(MACRO_QUAL_OBJ_RADIX(QC_2B_CNT_2B_INDEX, OT_FIXED)):	return 2;
+	case(MACRO_QUAL_OBJ_RADIX(QC_2B_CNT_2B_INDEX, OT_PLACEHOLDER)):	return 2;
+
 	case(MACRO_QUAL_OBJ_RADIX(QC_4B_CNT_4B_INDEX, OT_FIXED)):	return 4;
+	case(MACRO_QUAL_OBJ_RADIX(QC_4B_CNT_4B_INDEX, OT_PLACEHOLDER)):	return 4;
+
 	case(MACRO_QUAL_OBJ_RADIX(QC_1B_CNT_1B_INDEX, OT_SIZE_BY_VARIATION)):	return 1;
 	case(MACRO_QUAL_OBJ_RADIX(QC_2B_CNT_2B_INDEX, OT_SIZE_BY_VARIATION)):	return 2;
 	case(MACRO_QUAL_OBJ_RADIX(QC_4B_CNT_4B_INDEX, OT_SIZE_BY_VARIATION)):	return 4;
